@@ -1,0 +1,428 @@
+---
+title: "Проект №1"
+date: "26/10/2020"
+output:
+  html_document:
+    number_section: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(data.table)
+require(tidyverse)
+require(dplyr)
+require(corrplot)
+require(car)
+require(psych)
+require(cowplot)
+theme_set(theme_bw())
+```
+
+# Предобработка данных 
+
+Сначала объединим все данные с листов всех студентов в единый датафрейм. 
+
+
+```{r dpi = 300}
+data_unpack <- function(data_path){
+  tbl <-
+    list.files(path = data_path,
+               pattern = "*.csv", 
+               full.names = T) %>% 
+    map_df(~read_csv(., col_types = cols(.default = "c"))) 
+}
+
+
+mussel_data <- data_unpack("C:/Users/maxim/Desktop/Statistiks-and-R-programming/data")
+```
+
+Посмотрим на те данные, которые у нас есть:
+
+```{r dpi = 300, echo = FALSE}
+summary(mussel_data)
+```
+
+Увидим, что все значения во всех столбцах имеют тип character, что явно не совсем удобно. Разберемся, из-за чего это могло возникнуть. Посмотрим на все значения, которые не являются числами и из-за которых автоматическое приведение типов делает все столбцы не численными. Для этого напишем отдельную функцию, которая для всех по очереди переменных нашего датафрейма выводит сначала название соответствующего столбца, а затем те значения, которые не могут быть корректно переведы в численный формат. 
+
+```{r dpi = 300, message=FALSE, warning=FALSE, echo = FALSE}
+working_with_writing_errors <- function(user_data){
+    for (i in 1:ncol(user_data)){
+        vec <- user_data[[i]]
+        print(colnames(user_data)[i])
+        print(vec[is.na(unlist(lapply(vec, as.numeric)))])
+    }
+}
+
+working_with_writing_errors(mussel_data)
+```
+
+Видим, что помимо собственно пропущенных значений, студенты иногда ошибочно записывали, например, пол не в стандартном формате - 'one' вместо '1' и так далее. Однако такие значения не должны стать пропущенными - ведь легко восстановить, что именно имел ввиду сборщик данных. Для начала стоит разобраться с 2 столбцом. Дадим ему более понятное имя - уберем расшифровку "номер/пол" из названия, сделаем название просто "Sex", а сами значения в столбце превратим в фактор по указанному обозначению, то есть 1 - мужской пол, 2 - женский, 3 - ювенильный. Для этого так же придется сначала изменить те ячейки, в которых обозначение пола записано, например, словом "one".
+
+```{r dpi = 300}
+colnames(mussel_data)[2] <- "Sex"
+```
+
+Помимо некорректно записанных ячеек в столбце Sex мы так же можем "спасти" значение "nine" из столбца Rings:
+
+```{r dpi = 300}
+mussel_data$Sex[mussel_data$Sex == "one"] <- 1
+mussel_data$Sex[mussel_data$Sex == "three"] <- 3
+mussel_data$Sex[mussel_data$Sex == "male"] <- 1
+mussel_data$Rings[mussel_data$Rings == "nine"] <- 9
+```
+
+Теперь переведем переменную Sex в соответствующем столбце в фактор и переименуем уровни:
+
+```{r dpi = 300}
+mussel_data$Sex <- factor(mussel_data$Sex)
+levels(mussel_data$Sex) = c("male", "female", "juvenile")
+```
+
+Теперь, когда мы уверены, что спасли часть данных, которые бы превратились в NA при переводе в численный тип значений переменных, мы можем привести все столбцы (кроме второго - факторного) к численному типу.
+
+```{r dpi = 300, message=FALSE, warning=FALSE, echo = FALSE}
+mussel_data[,-2] <- lapply(mussel_data[,-2], as.numeric)
+
+```
+
+Теперь (уже с намного большим удовольствием) можем еще раз сделать summary(mussel_data):
+
+```{r dpi = 300, echo=FALSE}
+summary(mussel_data)
+
+```
+
+# Визуализация данных на предмет наличия выбросов
+
+Теперь наконец можно начать визуализировать данные на наличие выбросов. Видим, что одно значение по переменной Sex все-таки пропущено. Построим boxplot для, например, переменной Rings в зависимости от пола, выкинув единственное пропущенное значение (так как его не получится однозначно восстановить)
+
+```{r dpi = 300, echo = FALSE}
+ggplot(mussel_data[!(is.na(mussel_data$Sex)), ], aes(x=Sex, y=Rings))+
+    geom_boxplot()+
+    xlab("Пол")+
+    ylab("Число колец")+
+    ggtitle("Число колец в зависимости от пола")+
+    theme_bw()
+```
+
+Можно увидеть, что во всех трех группах присутствует достаточное количество выбросов. Посмотрим графики для всех остальных переменных (опять же игнорируя, но пока не выкидывая пропущенные значения - то есть если для какого-то наблюдения потеряна только, например, длина, а остальные данные собраны, то нам нет резона не отображать данные на графиках для тех переменных, которые не потеряны и выкидывать строку полностью).
+
+```{r dpi = 300, echo = FALSE}
+boxplot_rings <- ggplot(mussel_data[!(is.na(mussel_data$Sex)), ], aes(x=Sex, y=Rings, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Число колец")+
+    theme_bw()
+boxplot_length <- ggplot(mussel_data[!(is.na(mussel_data$Sex)) & !(is.na(mussel_data$Length)), ], aes(x=Sex, y = Length, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Длина")+
+    theme_bw()
+boxplot_diameter <- ggplot(mussel_data[!(is.na(mussel_data$Sex)) & !(is.na(mussel_data$Diameter)), ], aes(x=Sex, y = Diameter, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Диаметр")+
+    theme_bw()
+boxplot_height <- ggplot(mussel_data[!(is.na(mussel_data$Sex))  & !(is.na(mussel_data$Height)), ], aes(x=Sex, y = Height, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Высота")+
+    theme_bw()
+boxplot_whole_weight <- ggplot(mussel_data[!(is.na(mussel_data$Sex))  & !(is.na(mussel_data$Whole_weight)), ], aes(x=Sex, y = Whole_weight, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Полный вес")+
+    theme_bw()
+ggdraw()+
+draw_plot(boxplot_rings, x = 0, y = 0.5, width = 0.5, height = 0.5)+
+draw_plot(boxplot_length, x = 0.5, y = 0.5, width = 0.5, height = 0.5)+
+draw_plot(boxplot_diameter, x = 0, y = 0, width = 0.5, height = 0.5)+
+draw_plot(boxplot_height, x = 0.5, y = 0, width = 0.5, height = 0.5)
+boxplot_shucked_weight <- ggplot(mussel_data[!(is.na(mussel_data$Sex)) & !(is.na(mussel_data$Shucked_weight)), ], aes(x=Sex, y = Shucked_weight, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Очищенный вес")+
+    theme_bw()
+boxplot_viscera_weight <- ggplot(mussel_data[!(is.na(mussel_data$Sex))  & !(is.na(mussel_data$Viscera_weight)), ], aes(x=Sex, y = Viscera_weight, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Вес внутренних органов")+
+    theme_bw()
+boxplot_shell_weight <- ggplot(mussel_data[!(is.na(mussel_data$Sex))  & !(is.na(mussel_data$Shell_weight)), ], aes(x=Sex, y = Shell_weight, fill = Sex))+
+    geom_boxplot()+
+    guides(fill=FALSE)+
+    xlab("Пол")+
+    ylab("Вес раковины")+
+    theme_bw()
+ggdraw()+
+draw_plot(boxplot_whole_weight, x = 0, y = 0.5, width = 0.5, height = 0.5)+
+draw_plot(boxplot_shucked_weight, x = 0.5, y = 0.5, width = 0.5, height = 0.5)+
+draw_plot(boxplot_viscera_weight, x = 0, y = 0, width = 0.5, height = 0.5)+
+draw_plot(boxplot_shell_weight, x = 0.5, y = 0, width = 0.5, height = 0.5)
+
+```
+
+В целом, для каждой из переменных наблюдаем достаточно большое число выбросов. Кажется, что есть огромное число возможных объяснений их наличия. Одной из самых вероятных является то, что в данном исследовании принимало участие несколько человек, данные от которых мы объединили. Каждый из них мог мерить каждую из переменных как-то по-своему, так, что в итоге значения, полученные от разных исследователей, могут отличаться. Помимо непосредственно возможно разных дизайнов эксперимента, могло быть так, что кто-то из тех, кто снимал данные, снимал их адекватно и правильно, а кто-то нет, совершая определенные ошибки в измерениях, неправильно идентифицируя образцы и так далее. Возможно, что все выбросы связаны с конкретными 1-2 исследователями. Однако, так как точнее установить причину выбросов не представляется возможным, пока оставим их, помня, что возможно придется корректировать некоторые данные. 
+
+Дальше попробуем оценить наличие взаимосвязей между переменными. Для этого построим матрицу коэффициентов корреляции. Видим, что почти все столбцы неплохо взаимосвязаны - пожалуй, кроме переменной Rings. Первый факт довольно логичен, ведь в целом все наши переменные - это информация о линейных размерах и весе разных частей моллюска. Понятно, что чаще всего, если в целом большой, то не в одном измерении, а сразу по всем параметрам, более того, большие моллюски очевидно почти всегда оказываются тяжелее, чем маленькие моллюски. 
+
+```{r dpi = 300, echo = FALSE}
+mussel_data_without_NA <- na.omit(mussel_data)
+cor_mussel_data <- cor(mussel_data_without_NA[,-c(2)])
+corrplot(cor_mussel_data, method="number")
+```
+
+Что касается переменной Rings, то рассмотрим вопросы ее корреляции с другими переменными в отдельном пункте. 
+
+# Задание 
+
+Для моллюсков разного пола рассчитаем среднее значение и стандартное отклонение длины:
+
+```{r dpi = 300,  message=FALSE, warning=FALSE}
+mussel_data_without_NA %>% group_by(Sex) %>% dplyr::summarize(mean = mean(Length), sd = sd(Length))
+```
+
+# Задание 
+
+Посчитаем, у какого процента моллюсков значение переменной Height не превышает 0.165:
+
+```{r dpi = 300}
+num_of_small_mussels <- nrow(mussel_data_without_NA[mussel_data_without_NA$Height <= 0.165, ])
+percent_of_small_mussels <- round(num_of_small_mussels / nrow(mussel_data_without_NA) * 100, 2)
+print(percent_of_small_mussels)
+```
+
+# Задание 
+
+Найдем значение переменной Length, большее, чем у 92% наблюдений:
+
+```{r dpi = 300}
+q_of_len <- quantile(mussel_data$Length, probs = 0.92, na.rm = TRUE)
+print(q_of_len)
+```
+
+# Задание 
+
+Сделаем стандартизацию для переменной Length(выведем только первые несколько значений с помощью функции head, чтобы не захламлять вывод):
+```{r dpi = 300}
+Lenght_z_scores <- (mussel_data_without_NA$Length - mean(mussel_data_without_NA$Length)) / sd(mussel_data_without_NA$Length)
+head(Lenght_z_scores)
+```
+
+# Задание 
+
+Сравним моллюсков, у которых число колец равно 5 с теми, у которых число колец равно 15 по показателю диаметра. Эти две выборки являтся независимыми друг от друга, наблюдения также независимы. Однако размер выборки получается не слишком большим - моллюсков с 5 кольцами имеется:
+
+```{r dpi = 300, echo = FALSE}
+with_5_rings <- mussel_data_without_NA %>% filter(Rings == 5) 
+print(nrow(with_5_rings))
+```
+
+А с 15 кольцами:
+
+```{r dpi = 300, echo = FALSE}
+with_15_rings <- mussel_data_without_NA %>% filter(Rings == 15) 
+print(nrow(with_15_rings))
+```
+
+Мы хотим рассмотреть, имеются ли значимые различия по показателю диаметр у образцов с 5 и с 15 кольцами. Из-за того, что размеры выборок не очень велики, перед тем как сравнивать значение переменной Diameter с помощью t-теста проверим распределения в выборках на нормальность с помощью графиков qq-plot. 
+
+```{r dpi = 300, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+qqPlot(with_5_rings$Diameter, ylab = "Диаметр образцов с 5 кольцами")
+qqPlot(with_15_rings$Diameter, ylab = "Диаметр образцов с 15 кольцами")
+
+```
+
+Видно, что в пределах доверительных интервалов величины распределены нормально, поэтому можем применить t-тест чтобы сравнить диаметр образцов с 5 и 15 кольцами. 
+
+```{r dpi = 300, echo = FALSE}
+t.test(with_5_rings$Diameter, with_15_rings$Diameter)
+```
+
+То есть диаметр образцов с 15 кольцами значимо отличается от диаметра образцов с 5 кольцами, что можно так же наглядно увидеть на боксплоте:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, dpi=300, results='hide'}
+with_5_or_15_rings <- mussel_data_without_NA %>% filter(Rings == 5 | Rings == 15) 
+boxplot_for_5_and_15_rings <- ggplot(with_5_or_15_rings, aes(x=as.factor(Rings), y = Diameter))+
+    geom_boxplot()+
+    scale_x_discrete(name="Число колец")+
+    scale_y_continuous(name="Диаметр")
+    theme_bw()
+boxplot_for_5_and_15_rings
+
+```
+
+Однако, если задуматься, то этот вывод сам по себе не очень нагляден - среди особей с 5 и 15 кольцами встречаются как взрослые, так и детские образцы. Очевидно, что дети меньше взрослых, поэтому различия в диаметре могут быть обусловлены не числом колец напрямую, а просто тем, что дети меньше взрослых. Чтобы точно подтвердить нашу гипотезу о том, что диаметры образцов с 5 и 15 кольцам значимо отличаются, разделим их так же дополнительно по возрасту - разобьем на детей и взрослых с 5 и 15 кольцам соответственно. Проверим распределения в наших новых 4 группах на нормальность. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, dpi=300}
+adults_with_5_rings <- with_5_rings %>% filter(Sex == "male" | Sex == "female")
+adults_with_15_rings <- with_15_rings %>% filter(Sex == "male" | Sex == "female")
+juvenile_with_5_rings <- with_5_rings %>% filter(Sex == "juvenile")
+juvenile_with_15_rings <- with_15_rings %>% filter(Sex == "juvenile")
+qqplot_1 <- qqPlot(adults_with_5_rings$Diameter, ylab = "Взрослые образцы с 5 кольцами")
+qqplot_2 <- qqPlot(juvenile_with_5_rings$Diameter, ylab = "Дети с 5 кольцами")
+qqplot_3 <- qqPlot(adults_with_15_rings$Diameter, ylab = "Взрослые образцы с 15 кольцами")
+qqplot_4 <- qqPlot(juvenile_with_15_rings$Diameter, ylab = "Дети с 15 кольцами")
+```
+
+Можно увидеть, что размеры выборок здесь будут довольно различны - образцы с 5 кольцами в основном являются детьми, а образцы с 15 кольцами в основном взрослые. Однако, есть некоторый процент измерений взрослых с 5 кольцами и детей с 15 кольцами(и, например, измерение 5 колец не является выбросом для взрослых особей, если посмотреть повторно на boxplot из пункта 2). Поэтому сравним теперь отдельно образцы с 5 и 15 кольцами в каждой из возрастных групп. Отметим, что взрослые с 5 кольцами к сожалению явно распределены по диаметру не нормальным образом, поэтому для этого сравнения применим критерий Манна-Уитни, а не t-тест. Итак, в группе из взрослых особей:
+
+```{r dpi = 300, echo = FALSE}
+wilcox.test(adults_with_5_rings$Diameter, adults_with_15_rings$Diameter, alternative = "two.sided")
+```
+
+А для детских особей:
+
+```{r dpi = 300, echo = FALSE}
+t.test(juvenile_with_5_rings$Diameter, juvenile_with_15_rings$Diameter)
+```
+
+Для наглядности можем опять же визуализировать эти различия:
+
+```{r dpi = 300, echo = FALSE}
+adults_boxplot <- ggplot(with_5_or_15_rings[with_5_or_15_rings$Sex=='male' | with_5_or_15_rings$Sex=='female',], aes(x=as.factor(Rings), y = Diameter))+
+  geom_boxplot()+
+  scale_x_discrete(name="Число колец")+
+  scale_y_continuous(name="Диаметр")
+juvenile_boxplot <- ggplot(with_5_or_15_rings[with_5_or_15_rings$Sex=='juvenile',], aes(x=as.factor(Rings), y = Diameter))+
+  geom_boxplot()+
+  scale_x_discrete(name="Число колец")+
+  scale_y_continuous(name="Диаметр")
+ggdraw()+
+draw_plot(adults_boxplot, x = 0, y = 0, width = 0.5, height = 1)+
+draw_plot(juvenile_boxplot, x = 0.5, y = 0, width = 0.5, height = 1)+
+draw_plot_label(c("Взрослые", "Дети"), x = c(0.01, 0.55), y = c(0.96, 0.96), size = 16)
+```
+
+Вывод - диаметр особей с 5 и 15 кольцами значимо отличается, и диаметр у особей с 15 кольцами больше. Причем результат не зависит от того, какого возраста особь - если рассматривать отдельно детей и взрослых с 5 и 15 кольцами, то в каждой из возрастных групп это зависимость будет сохраняться.
+
+# Задание 
+
+Изучим отдельно переменные Diameter и Whole_weight. Как уже было посчитано выше, коэффициент корреляции между ними довольно большой, то есть есть основания предполагать взаимосвязь между ними.
+
+```{r dpi = 300, echo = FALSE}
+cor.test(~ Diameter + Whole_weight, mussel_data_without_NA)
+```
+
+Визуализируем зависимость этих переменных друг от друга:
+
+```{r dpi = 300, echo = FALSE, message=FALSE}
+ggplot(mussel_data_without_NA, aes(x = Diameter, y= Whole_weight))+
+  xlab("Диаметр")+
+  ylab("Вес образца")+
+  ggtitle("Зависимость веса образца от его диаметра")+
+  geom_point()+
+  geom_smooth()
+```
+
+Видно, что можно довольно уверенно сказать, что чем больше диаметр образца, тем больше он весит. Можно сказать, что функция напоминает квадратичную - и это логично. Ведь в очень грубой модели мы можем сказать, что масса моллюска равна его плотности, умноженной на объем. Объем, в свою очередь, будет равен площади моллюска на высоту, а если считать мидию приблизительно круглой, то получается, что линейной зависимостью (с точностью до констант, которыми будут являться число пи и плотность) должны обладать масса моллюска - Whole_weight - и произведение квадрата диаметра на высоту для соответствующего измерения. Проверим это:
+
+```{r dpi = 300, echo = FALSE, message=FALSE}
+ggplot(mussel_data_without_NA, aes(x = Diameter^2 * Height, y= Whole_weight))+
+  xlab("Диаметр^2 * Высота")+
+  ylab("Вес образца")+
+  ggtitle("Зависимость веса образца от его объема")+
+  geom_point()+
+  geom_smooth()
+```
+
+И если отсечь некоторые выбросы, которые очень портят линию тренда, то мы действительно получим очень хорошую линейную зависимость:
+
+```{r dpi = 300, echo = FALSE, message=FALSE}
+ggplot(mussel_data_without_NA[(mussel_data_without_NA$Diameter^2 * mussel_data_without_NA$Height) < 0.10, ], aes(x = Diameter^2 * Height, y= Whole_weight))+
+  xlab("Диаметр^2 * Высота")+
+  ylab("Вес образца")+
+  ggtitle("Зависимость веса образца от его объема")+
+  geom_point()+
+  geom_smooth()
+```
+
+То есть мы можем сделат вывод о том, что параметры веса и диаметра действительно взаимосвязаны, а объясняется это тем, что очевидно с увеличением линейных размеров моллюска увеличивается так же его вес. Так же мы смогли привести зависимость к чисто линейной, заменив диаметр моллюска на объем.
+
+# Дополнительно 
+
+Рассмотрим вопросы, связанные с корреляцией переменной Rings с другими переменными. Например, возьмем переменную Whole_weight. Сначала сделаем предположение - кольца у моллюсков являются аналогами годовых колец у деревьев, то есть, грубо говоря, чем колец больше, тем моллюск старше. Опять же, говоря довольно грубым языком, более взрослый моллюск должен обладать большими размером и весом. Однако, мы видим, что всего около половины изменчивости переменной Whole_weight объясняется изменчивостью переменной Rings:
+
+```{r, echo = FALSE}
+cor.test(mussel_data_without_NA$Rings, mussel_data_without_NA$Whole_weight)
+```
+
+Более того, кольца, как мы видели, не так очевидно коррелируют с возрастом - когда мы рассматривали образцы с 5 и 15 кольцами, мы видели, что среди обоих случаев были как взрослые, так и детские особи. Однако, там мы получили результат, что диаметр образцов с 15 кольцами значимо больше, чем среди образцов с 5. Так как диаметр и вес, как мы увидели в прошлом пункте, довольно хорошо объясняют изменчивость друг друга, то в целом ожидаемо, что и вес образцов с разным числом колец будет отличаться, хотя этого и не отображает коэффициент корреляции. Посмотрим, какие вообще значения веса моллюска получаются при каждом из значений числа колец:
+
+```{r, echo = FALSE}
+ggplot(mussel_data_without_NA, aes(x=as.factor(Rings), y = Whole_weight))+
+  geom_boxplot()+
+  scale_x_discrete("Количество колец")+
+  scale_y_continuous("Вес образца")
+```
+
+Как мы можем интерпретировать этот график? Мы видим, что сначала, при росте числа колец, вес действительно растет - несмотря на то, что среднее по весу для предыдущего значения числа колец почти всегда попадает в доверительный интервал следующего значения, мы, по-крайней мере, можем объяснить наш результат для 7го пункта, где мы нашли значимые различия в диаметре - для него график зависимости от числа колец выглядит похожим образом:
+
+```{r, echo = FALSE}
+ggplot(mussel_data_without_NA, aes(x=as.factor(Rings), y = Diameter))+
+  geom_boxplot()+
+  scale_x_discrete("Количество колец")+
+  scale_y_continuous("Диаметр образца")
+```
+
+Однако, очевидно, что при достижении какого-то порогового значения числа колец, и вес, и диаметр, и другие переменные (так все переменные, сообщающие о размере и весе моллюсков сильно коррелированы) перестают сильно изменяться - график как бы разбивается на две части, на первой из которых средние значения веса можно соединить прямой линией, означающей положительную корреляцию, а на второй линия, соединяющая средние значения, будет почти параллельна оси x. То есть примерно до "возраста" в 12 колец вес и размер моллюска растет, а после этого разумеется встречаются моллюски с довольно большим разбросом параметров веса и размера, однако в среднем, например, для выборок в 15 и 20 колец мы уже не можем откинуть нулевую гипотезу о их равенстве в генеральной совокупности:
+
+```{r dpi = 300, echo = FALSE}
+with_15_rings <- mussel_data_without_NA %>% filter(Rings == 15) 
+with_20_rings <- mussel_data_without_NA %>% filter(Rings == 20) 
+t.test(with_15_rings$Whole_weight, with_20_rings$Whole_weight)
+```
+
+Соответственно, довольно понятно значение коэффициента корреляции - переменные Rings и Whole_weight действительно коррелируют как бы "на половине значений". чтобы наглядно убедиться в этом действительно возьмем те измерения, у которых число колец меньше или равно 11 и посмотрим, какой для них получается коэффициент корреляции между Rings и Whole_weight:
+
+```{r, echo=FALSE}
+less_than_11_rings <- mussel_data_without_NA %>% filter(Rings <= 11)
+cor.test(less_than_11_rings$Rings, less_than_11_rings$Whole_weight)
+```
+
+А для Diameter еще лучше:
+
+```{r, echo=FALSE}
+less_than_11_rings <- mussel_data_without_NA %>% filter(Rings <= 11)
+cor.test(less_than_11_rings$Rings, less_than_11_rings$Diameter)
+```
+
+И мы сможем провести действительно довольно наглядную линию тренда для зависимости и веса (особенно если еще уберем выбросы - очень маленькие значения веса, причем являющиеся единичными измерениями для 1 и 2 колец), и диаметра от числа колец:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+less_than_11_rings <- mussel_data_without_NA %>% filter(Rings <= 11 & Rings > 2)
+ggplot(less_than_11_rings, aes(x=Rings, y = Whole_weight))+
+stat_summary(fun.data = mean_cl_boot, geom="errorbar") + 
+stat_summary(fun.data = mean_cl_boot, geom="point") +
+stat_summary(fun.data = mean_cl_boot, geom="line") +
+  geom_smooth()+
+  scale_x_discrete("Количество колец")+
+  scale_y_continuous("Вес образца")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+less_than_11_rings <- mussel_data_without_NA %>% filter(Rings <= 11)
+ggplot(less_than_11_rings, aes(x=Rings, y = Diameter))+
+stat_summary(fun.data = mean_cl_boot, geom="errorbar") + 
+stat_summary(fun.data = mean_cl_boot, geom="point") +
+stat_summary(fun.data = mean_cl_boot, geom="line") +
+  geom_smooth()+
+  scale_x_discrete("Количество колец")+
+  scale_y_continuous("Диаметр образца")
+  
+```
+
+То есть, в итоге, мы можем сделать вывод - количество колец коррелирует с параметрами размера и веса моллюска, но лишь на начальных стадиях роста. Это логично - если, рассмотреть, например, рост или вес человека, то он тоже зависит от возраста похожим образом. Разумеется, мы можем найти очень высокого ребенка и очень низкого взрослого (как здесь мы видели детей с 15 кольцами и взрослых с 5 кольцами), однако, если мы сравним выборки из 5летних и 15летних детей, то мы почти всегда получим, что рост у них значимо отличается, и, конечно, больше у 15летних. Однако, если мы возьмем людей возраста 15 и 20 лет, то у них рост уже вполне вероятно не будет значимо отличаться, а у 20 и 30 летних почти никогда не будет разным в среднем, опять же, при наличии определенных выбросов в обе стороны в обоих группах. Так что на самом деле корреляция переменной Rings с остальными может быть объяснена вполне адекватно. 
